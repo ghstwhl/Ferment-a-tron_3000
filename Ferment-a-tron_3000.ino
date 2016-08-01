@@ -154,6 +154,8 @@ void setup() {
 
 
 // Let's make sure the RTC is there...
+// If your RTC needs to be inialized, use the example code supplied in the library.  If you add the time initialization code to
+// this sketch, you run the risk of re-setting the clock every time you reset the Arduino.
   if (! RTC.begin()) {
 #ifdef DEBUG
     Serial.println(F("Couldn't find RTC"));
@@ -162,10 +164,6 @@ void setup() {
     while (1);
   }
 
-  RTC.adjust(DateTime(F(__DATE__), F(__TIME__)));
-  // This line sets the RTC with an explicit date & time, for example to set
-  // January 21, 2014 at 3am you would call:
-  // RTC.adjust(DateTime(2014, 1, 21, 3, 0, 0));
 
   if (! RTC.isrunning()) {
 #ifdef DEBUG
