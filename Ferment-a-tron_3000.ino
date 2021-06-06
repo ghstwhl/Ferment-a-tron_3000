@@ -2,19 +2,21 @@
 
 Controller module for the Ferment-a-Tron 3000
 
-Copyright 2016, Chris O'Halloran 
-
 This software assumes a stack made of:
-  - Arduino (ATMega328P or compatable)
-  - Adafruit Datalogging Shield wth RTC AND stacking headers (https://www.adafruit.com/product/1141 && https://www.adafruit.com/products/85)
-  - Adafruit RGB LCD Shield with buttons (https://www.adafruit.com/products/714 or https://www.adafruit.com/products/716)
-  - 10k Thermistor
+  - Seeeduino v3 - https://wiki.seeedstudio.com/Seeeduino_v3.0/
+  - Generic LCD 1602 LCD shield https://github.com/ghstwhl/ePartners/tree/main/LC7001
+    This uses A0 for buttons, in a janky value range sort of way.
+  - 10k Thermistor - https://www.adafruit.com/product/372
+    Thermistor is wired to A1
   - 4 Relay Module (http://amzn.to/1W7wsyP)
 
-Temp sensor is wired to A0
+Had to chuck the datalogging becasue the SD card and the cheap LCD both use D10. Ugh.
+#CheapPartsParadox
+
+This version is in Celcius, cuz New Zealand!
 
 Relays:
-  IN1-IN4 are wired to D4-D7, respectively
+  IN1-IN4 are wired to D1-D4, respectively
 
 Buttons:
 
@@ -23,95 +25,56 @@ Buttons:
   LEFT   - Drive +/- down one degree  
   RIGHT  - Drive +/- up one degree  
   SELECT - write settings to EEPROM
+
+
+
+Controller code Copyright 2016, Chris O'Halloran
+
+*********************************************************************************
+Code related to thermistor readings is copyright Limor Fried, Adafruit Industries
+and distributed under the MIT License.
+Please keep attribution and consider buying parts from Adafruit.
+https://learn.adafruit.com/thermistor/using-a-thermistor
+*********************************************************************************
+
+
 **********************/
 
-//Uncomment the below line to enable serial debugging and memory testing.
-#define DEBUG 1
-
+#include <LiquidCrystal.h>
+//LCD pin to Arduino https://github.com/ghstwhl/ePartners/tree/main/LC7001
+LiquidCrystal lcd( 8,  9,  4,  5,  6,  7);
 
 // BEGIN - load EEPROM library so we have persistent storage
 #include <EEPROM.h>
 // END - load EEPROM library so we have persistent storage
 
 
-// BEGIN - RGB Shield with buttons includes, objects, and stuff.
-#include <Wire.h>
-#include <Adafruit_RGBLCDShield.h>
-#include <utility/Adafruit_MCP23017.h>
-
-// The shield uses the I2C SCL and SDA pins. On classic Arduinos
-// this is Analog 4 and 5 so you can't use those for analogRead() anymore
-// However, you can connect other I2C sensors to the I2C bus and share
-// the I2C bus.
-Adafruit_RGBLCDShield lcd = Adafruit_RGBLCDShield();
-
-// These #defines make it easy to set the backlight color
-#define RED 0x1
-#define YELLOW 0x3
-#define GREEN 0x2
-#define TEAL 0x6
-#define BLUE 0x4
-#define VIOLET 0x5
-#define WHITE 0x7
-// END - RGB Shield with buttons includes, objects, and stuff.
-
-
-
-// BEGIN - load RTC library so we can write useful logs
-#include "RTClib.h"
-RTC_DS1307 RTC;
-String returnDateTime(void);
-// END - load RTC library so we can write useful logs
-
-
-
-
 // BEGIN - defines for control of the relays
 // These defines set the relay control pins.  They are here to make it easier if someone wires their stack differently.
-
-#define RELAY1 4
-#define RELAY2 5
-#define RELAY3 6
-#define RELAY4 7
+#define RELAY1 0
+#define RELAY2 1
+#define RELAY3 2
+#define RELAY4 3
 // END - defines for control of the relays
 
-
-
-// BEGIN - Let's get set up for SD data logging
-#include <SPI.h>
-#include <SD.h>
-// change this to match your SD shield or module;
-// Arduino Ethernet shield: pin 4
-// Adafruit SD shields and modules: pin 10
-// Sparkfun SD shield: pin 8
-const int chipSelect = 10;
-// set up variables using the SD utility library functions:
-Sd2Card card;
-SdVolume volume;
-SdFile root;
-int peltierStatus; 
-// END - Let's get set up for SD data logging
-
-
-
-
+// https://learn.adafruit.com/thermistor/using-a-thermistor
 //// These defines are used in the read_temp_f()  function.
 // Defines related to the thermistor being used for temperature readings
 // which analog pin to connect
-#define THERMISTORPIN A0         
+#define THERMISTORPIN A1       
 // resistance at 25 degrees C
 #define THERMISTORNOMINAL 10000      
 // temp. for nominal resistance (almost always 25 C)
 #define TEMPERATURENOMINAL 25   
 // how many samples to take and average, more takes longer
 // but is more 'smooth'
-#define NUMSAMPLES 5
+#define NUMSAMPLES 100
 // The beta coefficient of the thermistor (usually 3000-4000)
 #define BCOEFFICIENT 3950
 // the value of the 'other' resistor
 #define SERIESRESISTOR 10000    
 // Let's pre-define our termperature reading subroutine
-float read_temp_f(void);
+float read_temp_c(void);
 float temp;
 void statusDisplay(void);
 
@@ -131,56 +94,28 @@ int setTemperature;
 int driftAllowed;
 unsigned long ticktock;
 
-
 //Making the variable for button status global, rather than create and destroy it every time we call buttonCheck()
-uint8_t buttons;
+int buttons;
 void buttonCheck(void);
 void relayControl(void);
 
 
 void setup() {
-#ifdef DEBUG
-  Serial.begin(9600);  //Start the serial connection with the computer
-                       //to view the result open the serial monitor 
-  Serial.println(F("Setup..."));
-#endif
 
   // BEGIN - initialize the LCD and wipe it clean
   lcd.begin(16, 2);
   lcd.clear();
   lcd.setCursor(0,0);
-  lcd.setBacklight(WHITE);
   // END - initialize the LCD and wipe it clean
 
 
-// Let's make sure the RTC is there...
-// If your RTC needs to be inialized, use the example code supplied in the library.  If you add the time initialization code to
-// this sketch, you run the risk of re-setting the clock every time you reset the Arduino.
-  if (! RTC.begin()) {
-#ifdef DEBUG
-    Serial.println(F("Couldn't find RTC"));
-#endif
-    lcd.print("ERROR: RTC");
-    while (1);
-  }
-
-
-  if (! RTC.isrunning()) {
-#ifdef DEBUG
-    Serial.println(F("RTC is NOT running!"));
-#endif
-  }
-
-
-  // BEGIN - setup A0 for temperature readings, and try to load any stored settings
+  // BEGIN - setup A1 for temperature readings, and try to load any stored settings
   //         IF there are NO stored settings, we need A0 ready so that the readSettingsFromEEPROM()
   //         function can use the current temp as the default.
-  pinMode(A0, INPUT);
+  pinMode(A1, INPUT);
   readSettingsFromEEPROM();
   // END - setup A0 for temperature readings, and try to load any stored settings
   
-
-
   // BEGIN - Let's get our relays prepped for action.
   pinMode(RELAY1, OUTPUT);
   digitalWrite(RELAY1,HIGH);
@@ -195,116 +130,20 @@ void setup() {
   digitalWrite(RELAY4,HIGH);
   // END - Let's get our relays prepped for action.
 
+  // THIS REQUIRES CONNECTING 3.3v to AREF
+  analogReference(EXTERNAL);
 
-  // BEGIN - Time to set up the SD card and make sure it is there.
-
-#ifdef DEBUG
-  Serial.print(F("\nInitializing SD card..."));
-#endif
-
-  // we'll use the initialization code from the utility libraries
-  // since we're just testing if the card is working!
-  if (!card.init(SPI_HALF_SPEED, chipSelect)) {
-#ifdef DEBUG
-    Serial.println(F("initialization failed. Things to check:"));
-    Serial.println(F("* is a card inserted?"));
-    Serial.println(F("* is your wiring correct?"));
-    Serial.println(F("* did you change the chipSelect pin to match your shield or module?"));
-    lcd.print("ERROR: SD");
-    while (1);
-#endif
-  } else if (!SD.begin(chipSelect)) {
-#ifdef DEBUG
-    Serial.println("Card failed, or not present");
-#endif
-    lcd.print("ERROR: SD");
-    while (1);
-  }
-else {
-#ifdef DEBUG
-    Serial.println(F("Wiring is correct and a card is present."));
-    Serial.println(F("card initialized."));
-#endif
-  }
-
-  // Check to see if the log file exists.  If not, we need to initialize the file and write the CSV header line.
-  if (!SD.exists("brewtron.csv") ) {
-    File dataFile = SD.open("brewtron.csv", FILE_WRITE);
-
-    // if the file is available, write to it:
-    if (dataFile) {
-      dataFile.println(F("datetime,setting,drift allowed,temperature,status"));
-      dataFile.close();
-      // print to the serial port too:
-#ifdef DEBUG
-      Serial.println(F("Writing CSV header: datetime,setting,drift allowed,temperature,status"));
-#endif
-    }
-    // if the file isn't open, pop up an error:
-    else {
-#ifdef DEBUG
-      Serial.println(F("error opening datalog.txt"));
-#endif
-    }
-
-  }
-  else {
-#ifdef DEBUG
-    Serial.println(F("EXISTS:  brewtron.csv"));
-#endif
-  }
 
 }
 
 void loop() {
-  String dateTime = returnDateTime();
-  temp = read_temp_f();
-  relayControl();
+  temp = read_temp_c();
   statusDisplay();
-
-
-  // Let's write the logging data
-  File dataFile = SD.open("brewtron.csv", FILE_WRITE);
-
-  // if the file is available, write to it:
-  if (dataFile) {
-    dataFile.print(dateTime);
-    dataFile.print(F(","));
-    dataFile.print(setTemperature);
-    dataFile.print(F(","));
-    dataFile.print(driftAllowed);
-    dataFile.print(F(","));
-    dataFile.print(temp);
-    dataFile.print(F(","));
-    dataFile.println(peltierStatus);
-    dataFile.close();
-    // print to the serial port too:
-#ifdef DEBUG
-    Serial.print(dateTime);
-    Serial.print(F(","));
-    Serial.print(setTemperature);
-    Serial.print(F(","));
-    Serial.print(driftAllowed);
-    Serial.print(F(","));
-    Serial.print(temp);
-    Serial.print(F(","));
-    Serial.println(peltierStatus);
-#endif
-  }
-  // if the file isn't open, pop up an error:
-  else {
-#ifdef DEBUG
-    Serial.println("error opening datalog.txt");
-#endif
-  }
-
-
-  
-  // We 'wait' for a second, but the whole time we are looking for button presses.
-  ticktock = millis();
-  while ( (ticktock <= millis()) && ((ticktock + 10000 ) >= millis()) ) {
+  for (int i=0; i < 100; i+=10) {
     buttonCheck();
+    delay(10);
   }
+  relayControl();
 }
 
 
@@ -317,13 +156,14 @@ void statusDisplay() {
   lcd.setCursor(0,0);
   lcd.print("Temp:");
   lcd.print(temp);
-  lcd.print("F");
+  lcd.print("C   ");
 
   lcd.setCursor(0, 1);
   lcd.print("Set: ");
   lcd.print(setTemperature);
-  lcd.print(F("F +/-"));
+  lcd.print(F("C +/-"));
   lcd.print(driftAllowed);
+  lcd.print("   ");
   
 }
 
@@ -339,28 +179,18 @@ void readSettingsFromEEPROM() {
     lcd.clear();
     lcd.setCursor(0,0);
     lcd.print("Setting defaults");
-    lcd.setBacklight(WHITE);
-#ifdef DEBUG
-    Serial.println(F("Custom EEPROM object has not been initialized."));
-#endif
-    setTemperature = (int)read_temp_f();
-    driftAllowed = 2;
+    setTemperature = (int)read_temp_c();
+    driftAllowed = 1;
 
     lcd.setCursor(0, 1);
     lcd.print(setTemperature);
-    lcd.print(F("F +/-"));
+    lcd.print(F("C +/-"));
     lcd.print(driftAllowed);
     delay(1000);    
   }
   else {
     setTemperature = tempVar.setTemperature;
     driftAllowed = tempVar.driftAllowed;
-#ifdef DEBUG
-    Serial.println(F("Read custom object from EEPROM: "));
-    Serial.println(tempVar.setTemperature);
-    Serial.println(tempVar.driftAllowed);
-    Serial.println(tempVar.checksum);
-#endif
   }
 
 }
@@ -368,36 +198,22 @@ void readSettingsFromEEPROM() {
 
 
 
-float read_temp_f(void) {
-    int samples[NUMSAMPLES];
-      uint8_t i;
-      float average;
+float read_temp_c(void) {
+  // https://learn.adafruit.com/thermistor/using-a-thermistor
+  float average = 0;
      
-      // take N samples in a row, with a slight delay
-      for (i=0; i< NUMSAMPLES; i++) {
-       samples[i] = analogRead(THERMISTORPIN);
-       delay(10);
-      }
-     
-      // average all the samples out
-      average = 0;
-      for (i=0; i< NUMSAMPLES; i++) {
-         average += samples[i];
-      }
-      average /= NUMSAMPLES;
+  // take N samples in a row, with a slight delay
+  for (uint8_t i=0; i< NUMSAMPLES; i++) {
+    average += analogRead(THERMISTORPIN);
+    delay(10);
+  }
+  // average all the samples out
+  average /= NUMSAMPLES;
 
-#ifdef DEBUG
-      Serial.print(F("Average analog reading ")); 
-      Serial.println(average);
-#endif
 
       // convert the value to resistance
       average = 1023 / average - 1;
       average = SERIESRESISTOR / average;
-#ifdef DEBUG
-      Serial.print(F("Thermistor resistance ")); 
-      Serial.println(average);
-#endif
      
       float steinhart;
       steinhart = average / THERMISTORNOMINAL;     // (R/Ro)
@@ -406,17 +222,9 @@ float read_temp_f(void) {
       steinhart += 1.0 / (TEMPERATURENOMINAL + 273.15); // + (1/To)
       steinhart = 1.0 / steinhart;                 // Invert
       steinhart -= 273.15;                         // convert to C
-     
-      float fahrenheit;
-      fahrenheit = steinhart * 9 / 5 + 32;
 
-#ifdef DEBUG
-      Serial.print(F("Temperature ")); 
-      Serial.print(fahrenheit);
-      Serial.println(F(" *F"));
-#endif
 
-  return(fahrenheit);
+  return(steinhart);
 
 }
 
@@ -424,33 +232,30 @@ float read_temp_f(void) {
 
 
 void buttonCheck() {
-  buttons = lcd.readButtons();
+  buttons = analogRead(0);
+  
+  if ( buttons < 800) {
 
-  if (buttons) {
-    if (buttons & BUTTON_UP) {
-      while (buttons & BUTTON_UP) { buttons = lcd.readButtons(); }
+    if (buttons < 60) {
+      driftAllowed++;
+    }
+    else if (buttons < 250) {
       setTemperature++;
     }
-    if (buttons & BUTTON_DOWN) {
-      while (buttons & BUTTON_DOWN) { buttons = lcd.readButtons(); }
+    else if (buttons < 500){
       setTemperature--;
     }
-    if (buttons & BUTTON_LEFT) {
-      while (buttons & BUTTON_LEFT) { buttons = lcd.readButtons();}
-      if (driftAllowed > 0 ) {
+    else if (buttons < 825){
+      if ( 0 < driftAllowed ) {
         driftAllowed--;
       }
     }
-    if (buttons & BUTTON_RIGHT) {
-      while (buttons & BUTTON_RIGHT) { buttons = lcd.readButtons();}
-      driftAllowed++;
+//  When using 3.3v AREF, the Select button is no longer detectable.
+//  This forces us to do write to EEPROM after every button press.
+    writeSettingsToEEPROM();
+    while( analogRead(0) < 800 ) {
     }
-    if (buttons & BUTTON_SELECT) {
-      while (buttons & BUTTON_SELECT) { buttons = lcd.readButtons();}
-      writeSettingsToEEPROM();
-    }
-    statusDisplay();
-    relayControl();
+
   }
 }
 
@@ -468,14 +273,8 @@ void writeSettingsToEEPROM() {
   lcd.clear();
   lcd.setCursor(0,0);
   lcd.print("Settings saved");
-  lcd.setBacklight(WHITE);
   delay(1000);
   lcd.clear();
-
-#ifdef DEBUG
-  Serial.println(F("Written custom setings to EEPROM"));
-#endif
-
 }
 
 
@@ -486,57 +285,23 @@ void relayControl() {
     digitalWrite(RELAY1,LOW);
     digitalWrite(RELAY2,HIGH);
     digitalWrite(RELAY3,LOW);
-    lcd.setBacklight(RED);
-    peltierStatus = 1;
+    lcd.setCursor(15,1);
+    lcd.print(">");
   }
   else if ( (int)temp > (setTemperature + driftAllowed) ) {
     // Turn on the chiller and external fan
     digitalWrite(RELAY1,HIGH);
     digitalWrite(RELAY2,LOW);
     digitalWrite(RELAY3,LOW);
-    lcd.setBacklight(BLUE);
-    peltierStatus = 2;
+    lcd.setCursor(15,1);
+    lcd.print("<");
   }
   else {
     // Turn off the heat pumps and fans    
     digitalWrite(RELAY1,HIGH);
     digitalWrite(RELAY2,HIGH);
     digitalWrite(RELAY3,HIGH);
-    lcd.setBacklight(WHITE);
-    peltierStatus = 0;
+    lcd.setCursor(15,1);
+    lcd.print("-");
   }
-}
-
-
-String returnDateTime() {
-  DateTime now = RTC.now();
-  String DateString = "";
-  char buf[8];
-
-  sprintf(buf, "%04d", now.year());
-  DateString += buf;
-  DateString += '/';
-  sprintf(buf, "%02d", now.month());
-  DateString += buf;
-  DateString += '/';
-  sprintf(buf, "%02d", now.day());
-  DateString += buf;
-
-  DateString += ' ';
-
-  sprintf(buf, "%02d", now.hour());
-  DateString += buf;
-  DateString += ':';
-  sprintf(buf, "%02d", now.minute());
-  DateString += buf;
-  DateString += ':';
-  sprintf(buf, "%02d", now.second());
-  DateString += buf;
-
-#ifdef DEBUG
-  Serial.println(DateString);
-#endif
-
-  return(DateString);
-
 }
